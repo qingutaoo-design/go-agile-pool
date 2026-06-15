@@ -426,10 +426,18 @@ func (p *Pool) scaleIfNeeded() {
 	p.addRunningWorkersNum(actualSpawn)
 	p.lock.Unlock()
 
+	p.muIdle.Lock()
 	for i := int64(0); i < actualSpawn; i++ {
-		w := p.workerPool.Get().(*worker)
+		// Reuse idle workers before allocating new ones.
+		w := p.idleWorks.Pop()
+		if w == nil {
+			w = p.workerPool.Get().(*worker)
+		}
+		p.muIdle.Unlock()
 		go w.run(nil)
+		p.muIdle.Lock()
 	}
+	p.muIdle.Unlock()
 }
 
 // Close marks the pool as closed and stops its background cleaner goroutine.
