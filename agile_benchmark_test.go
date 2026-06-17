@@ -68,7 +68,7 @@ func BenchmarkAgilePoolSequentialMinHeap(b *testing.B) {
 		pool := agilepool.NewPool(agilepool.NewConfig(
 			agilepool.WithCleanPeriod(500*time.Millisecond),
 			agilepool.WithTaskQueueSize(10000),
-			agilepool.WithWorkerNumCapacity(20000),
+			agilepool.WithWorkerNumCapacity(100000),
 			agilepool.WithIdleContainerType(agilepool.MinHeapType),
 		))
 
@@ -88,7 +88,7 @@ func BenchmarkAgilePoolSequentialLinkedList(b *testing.B) {
 		// 20k worker capacity gives the best performance
 		pool := agilepool.NewPool(agilepool.NewConfig(
 			agilepool.WithCleanPeriod(500*time.Millisecond),
-			agilepool.WithTaskQueueSize(10000),
+			agilepool.WithTaskQueueSize(100000),
 			agilepool.WithWorkerNumCapacity(20000),
 			agilepool.WithIdleContainerType(agilepool.LinkedListType),
 		))

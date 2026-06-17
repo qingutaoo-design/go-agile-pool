@@ -53,6 +53,31 @@ loop:
 			w.runTask(task)
 
 		default:
+			// Try the chunked buffer before the second channel check.
+			// Grab a batch of up to 8 tasks per lock acquisition to
+			// amortise the mutex overhead across multiple tasks and
+			// reduce contention with the submission path.
+			const batchSize = 8
+			var batch [batchSize]Task
+			n := 0
+			w.pool.taskMu.Lock()
+			for n < batchSize {
+				t, ok := w.pool.popHead()
+				if !ok {
+					break
+				}
+				batch[n] = t
+				n++
+			}
+			w.pool.taskMu.Unlock()
+			for i := 0; i < n; i++ {
+				w.lastActiveAt = time.Now()
+				w.runTask(batch[i])
+			}
+			if n > 0 {
+				continue
+			}
+
 			// Lock-free second check: catch tasks that arrived in the
 			// tiny window between the two select polls. Submit no longer
 			// holds p.lock, so serialisation via lock is unnecessary.

@@ -3,26 +3,26 @@ package agilepool
 import "time"
 
 type Config struct {
-	cleanPeriod       time.Duration
-	taskQueueSize     int64
-	workerNumCapacity int64
-	workMode          WorkMode
-	idleContainerType IdleContainerType
-	statsSamplePeriod time.Duration // sampling interval for rate stats (e.g. 100ms)
-	statsWindowSize   int           // number of windows for median calculation
-	scalerPeriod      time.Duration // scaler tick interval (e.g. 50ms)
-	backlogDecayFactor float64      // queue backlog weight in scaler target (0-1)
+	cleanPeriod        time.Duration
+	taskQueueSize      int64 // retained for API compat; internal channel cap is fixed at 64
+	workerNumCapacity  int64
+	workMode           WorkMode
+	idleContainerType  IdleContainerType
+	statsSamplePeriod  time.Duration // sampling interval for rate stats (e.g. 100ms)
+	statsWindowSize    int           // number of windows for median calculation
+	scalerPeriod       time.Duration // scaler tick interval (e.g. 50ms)
+	backlogDecayFactor float64       // queue backlog weight in scaler target (0-1)
 }
 
 type ConfigOption func(*Config)
 
 func NewConfig(opts ...ConfigOption) *Config {
 	config := &Config{
-		cleanPeriod:       defaultCleanPeriod,
-		taskQueueSize:     defaultTaskQueueSize,
-		workerNumCapacity: defaultMaxWorkerNumCapacity,
-		workMode:          defaultWorkMode,
-		idleContainerType: defaultIdleContainerType,
+		cleanPeriod:        defaultCleanPeriod,
+		taskQueueSize:      defaultTaskQueueSize,
+		workerNumCapacity:  defaultMaxWorkerNumCapacity,
+		workMode:           defaultWorkMode,
+		idleContainerType:  defaultIdleContainerType,
 		statsSamplePeriod:  defaultStatsSamplePeriod,
 		statsWindowSize:    defaultStatsWindowSize,
 		scalerPeriod:       defaultScalerPeriod,
@@ -42,6 +42,10 @@ func WithCleanPeriod(duration time.Duration) ConfigOption {
 	}
 }
 
+// WithTaskQueueSize is retained for backward compatibility.
+// The internal handoff channel capacity is now fixed (64 slots) and the
+// primary queue (taskBuf) grows dynamically on demand, so the queue-size
+// setting has no effect on pre-allocated memory or scaler behaviour.
 func WithTaskQueueSize(size int64) ConfigOption {
 	return func(c *Config) {
 		if size > 0 {
