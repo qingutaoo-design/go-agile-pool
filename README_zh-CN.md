@@ -245,6 +245,10 @@ pool.SetLogger(log.Default())       // 标准库
 pool.SetLogger(zapLogger.Sugar())   // zap
 ```
 
+## 致谢
+
+自适应扩缩容算法的设计灵感来源于 [Little's Law](https://en.wikipedia.org/wiki/Little%27s_law) 排队论——特别感谢 [@knowledge404](https://github.com/a3141294854) 提出的将排队论应用于 worker pool 自动扩缩容的宝贵建议。
+
 ## 许可证
 
 [MIT](LICENSE)
