@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	agilepool "github.com/Yiming1997/agilePool"
+	agilepool "github.com/Yiming1997/agilePool/v2"
 	"github.com/stretchr/testify/assert"
 )
 
