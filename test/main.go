@@ -86,8 +86,8 @@ func main() {
 
 	// Wait one tick for final metrics collection
 	if args.TakeTime > 0 {
-		fmt.Printf("  Waiting %ds for final metrics collection...\n", args.TakeTime)
-		time.Sleep(time.Duration(args.TakeTime) * time.Second)
+		fmt.Printf("  Waiting %.3fs for final metrics collection...\n", args.TakeTime)
+		time.Sleep(time.Duration(args.TakeTime * float64(time.Second)))
 	}
 
 	// Extra observation window

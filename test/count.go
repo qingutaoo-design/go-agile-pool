@@ -13,7 +13,7 @@ import (
 // Couter collects memory, GC, CPU and pool metrics at a fixed interval.
 func Couter(args FlagArgs, p *agilepool.Pool, f *os.File, start time.Time) {
 	var memStats runtime.MemStats
-	tick := time.NewTicker(time.Duration(args.TakeTime) * time.Second)
+	tick := time.NewTicker(time.Duration(args.TakeTime * float64(time.Second)))
 	defer tick.Stop()
 
 	headerWritten := false

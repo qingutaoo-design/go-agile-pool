@@ -82,7 +82,7 @@ type FlagArgs struct {
 	MemProfile bool
 
 	// Metric sampling
-	TakeTime    int
+	TakeTime    float64
 	LogFileName string
 	LogFormat   string
 
@@ -148,7 +148,8 @@ func parseFlags() FlagArgs {
 		queueSize                                int64
 		container, mode                          string
 		cpuProf, memProf                         bool
-		takeTime, waitExit                       int
+		takeTime                                 float64
+		waitExit                                 int
 		logFile, logFormat                       string
 		taskTypeStr                              string
 		taskBase, taskExtra, taskMean, taskSigma int
@@ -188,8 +189,8 @@ func parseFlags() FlagArgs {
 
 	flag.BoolVar(&cpuProf, "cpuprofile", false, "enable CPU profiling")
 	flag.BoolVar(&memProf, "memprofile", false, "enable memory profiling")
-	flag.IntVar(&takeTime, "take-time", 0, "metric sampling interval (0=disabled)")
-	flag.IntVar(&takeTime, "i", 0, "sampling interval (short)")
+	flag.Float64Var(&takeTime, "take-time", 1, "metric sampling interval in seconds (0=disabled)")
+	flag.Float64Var(&takeTime, "i", 1, "sampling interval in seconds (short)")
 	flag.StringVar(&logFile, "log-file", "", "output file path (empty=auto)")
 	flag.StringVar(&logFile, "o", "", "output file (short)")
 	flag.StringVar(&logFormat, "log-format", "csv", "output format: csv, json")
@@ -292,7 +293,7 @@ func printConfig(args FlagArgs) {
 		fmt.Println("  Mem profile:   enabled")
 	}
 	if args.TakeTime > 0 {
-		fmt.Printf("  Sampling:      %ds → %s (%s)\n", args.TakeTime, args.LogFileName, args.LogFormat)
+		fmt.Printf("  Sampling:      %.3fs → %s (%s)\n", args.TakeTime, args.LogFileName, args.LogFormat)
 	}
 	fmt.Println()
 }
