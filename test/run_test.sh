@@ -33,3 +33,5 @@ go build -o agilepool_test .
 ./agilepool_test -T fixed --task-base 3000 -U immediate -t 5000 -w 500 -i 1 -f csv
 ./agilepool_test -T fixed --task-base 500 -U immediate -t 200000 -w 10000 -i 1 -f csv -e 3
 ./agilepool_test -T uniform --task-base 500 --task-extra 100 -U linear --submit-interval 15 --submit-jitter 5 -t 8000 -w 10000 -c minheap -m nonblock -i 1 -f json -e 5
+
+python plot_csv.py

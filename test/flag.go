@@ -49,7 +49,7 @@ const (
 type Phase struct {
 	StartSec    int // relative start time (seconds)
 	DurationSec int // duration (seconds)
-	RatePerSec  int // submissions per second
+	RatePerSec  float64 // submissions per second
 }
 
 // SubmitConfig holds submission control parameters.
@@ -131,7 +131,7 @@ func parsePhases(s string) ([]Phase, error) {
 		}
 		start, e1 := strconv.Atoi(strings.TrimSpace(parts[0]))
 		dur, e2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-		rate, e3 := strconv.Atoi(strings.TrimSpace(parts[2]))
+		rate, e3 := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
 		if e1 != nil || e2 != nil || e3 != nil {
 			return nil, fmt.Errorf("phase %d: invalid number", i)
 		}
@@ -402,7 +402,7 @@ func runSubmitter(pool *agilepool.Pool, cfg SubmitConfig, numTasks int, durFn fu
 	case SubmitPoisson:
 		runTimedSubmit(pool, numTasks, durFn, time.Duration(cfg.PoissonMeanMs)*time.Millisecond, 0, false)
 	case SubmitPhased:
-		runPhased(pool, cfg)
+		runPhased(pool, cfg, durFn)
 	}
 }
 
@@ -444,15 +444,21 @@ func runTimedSubmit(pool *agilepool.Pool, n int, durFn func() time.Duration, bas
 	pool.Wait()
 }
 
-func runPhased(pool *agilepool.Pool, cfg SubmitConfig) {
+// runPhased executes a multi-phase burst submission schedule.
+// Each shard has its own token channel, a dispenser goroutine, and
+// multiple submitters. Tokens control the submission rate; the pool's
+// worker capacity caps actual concurrency.
+func runPhased(pool *agilepool.Pool, cfg SubmitConfig, durFn func() time.Duration) {
 	if len(cfg.Phases) == 0 {
 		return
 	}
+
 	shards := cfg.Shards
 	if shards < 1 {
 		shards = 1
 	}
-	submittersPerShard := cfg.Submitters / shards
+
+	submittersPerShard := cfg.Submitters
 	if submittersPerShard < 1 {
 		submittersPerShard = 1
 	}
@@ -462,40 +468,60 @@ func runPhased(pool *agilepool.Pool, cfg SubmitConfig) {
 
 	for s := 0; s < shards; s++ {
 		tokenCh := make(chan struct{}, 10000)
-		go dispenseTokens(tokenCh, cfg.Phases, shards)
-		submitPhasedTasks(pool, tokenCh, submittersPerShard, &submitWG, &totalSubmitted)
+		go dispenseTokens(tokenCh, cfg.Phases, shards, s)
+		submitPhasedTasks(pool, tokenCh, submittersPerShard, &submitWG, &totalSubmitted, durFn)
 	}
 
 	submitWG.Wait()
 	pool.Wait()
-	fmt.Printf("  Total submitted: %d\n", atomic.LoadInt64(&totalSubmitted))
 }
 
-func dispenseTokens(tokenCh chan<- struct{}, phases []Phase, shards int) {
+// dispenseTokens produces tokens using a float accumulator for precise
+// sub-millisecond rate control. Even 0.5 tokens/s per shard will fire
+// 1 token every 2 seconds. Drops tokens when the channel is full.
+//
+// Phase.StartSec is respected: if there is a gap between phases,
+// the dispenser sleeps until the next phase's start time.
+func dispenseTokens(tokenCh chan<- struct{}, phases []Phase, shards, shardID int) {
+	defer close(tokenCh)
+
+	var elapsedMs int
 	for _, p := range phases {
-		ticks := p.DurationSec * 1000
-		tokensPerTick := p.RatePerSec / shards / 1000
-		if tokensPerTick < 1 {
-			tokensPerTick = 1
+		// Wait until this phase's start time
+		startMs := p.StartSec * 1000
+		if startMs > elapsedMs {
+			time.Sleep(time.Duration(startMs-elapsedMs) * time.Millisecond)
+			elapsedMs = startMs
 		}
-		for tick := 0; tick < ticks; tick++ {
-			for t := 0; t < tokensPerTick; t++ {
-				tokenCh <- struct{}{}
+
+		ratePerShard := p.RatePerSec / float64(shards)
+		var acc float64
+		totalMs := p.DurationSec * 1000
+		for ms := 0; ms < totalMs; ms++ {
+			acc += ratePerShard / 1000
+			for acc >= 1 {
+				select {
+				case tokenCh <- struct{}{}:
+				default:
+				}
+				acc--
 			}
 			time.Sleep(time.Millisecond)
 		}
+		elapsedMs += totalMs
 	}
-	close(tokenCh)
 }
 
-func submitPhasedTasks(pool *agilepool.Pool, tokenCh <-chan struct{}, submitters int, wg *sync.WaitGroup, total *int64) {
+// submitPhasedTasks launches submitters that read tokens and submit real
+// tasks (with durFn) to the pool. Stops when the token channel is closed.
+func submitPhasedTasks(pool *agilepool.Pool, tokenCh <-chan struct{}, submitters int, wg *sync.WaitGroup, total *int64, durFn func() time.Duration) {
 	for g := 0; g < submitters; g++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for range tokenCh {
 				atomic.AddInt64(total, 1)
-				pool.Submit(agilepool.TaskFunc(func() error { return nil }))
+				pool.Submit(newTask(durFn))
 			}
 		}()
 	}
