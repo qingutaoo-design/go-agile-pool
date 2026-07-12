@@ -62,6 +62,30 @@ func BenchmarkAgilePoolLinkedList(b *testing.B) {
 	}
 }
 
+func BenchmarkAgilePoolRingQueue(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		// 20k worker capacity gives the best performance
+		pool := agilepool.NewPool(agilepool.NewConfig(
+			agilepool.WithCleanPeriod(500*time.Millisecond),
+			agilepool.WithTaskQueueSize(10000),
+			agilepool.WithWorkerNumCapacity(50000),
+			agilepool.WithIdleContainerType(agilepool.RingQueueType),
+		))
+
+		for j := 0; j < taskCount; j++ {
+			go func() {
+				pool.Submit(agilepool.TaskFunc(func() error {
+					time.Sleep(10 * time.Millisecond)
+					return nil
+				}))
+
+			}()
+		}
+		pool.Wait()
+		pool.Close()
+	}
+}
+
 func BenchmarkAgilePoolSequentialMinHeap(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// 20k worker capacity gives the best performance
@@ -92,6 +116,27 @@ func BenchmarkAgilePoolSequentialLinkedList(b *testing.B) {
 			agilepool.WithWorkerNumCapacity(20000),
 			agilepool.WithIdleContainerType(agilepool.LinkedListType),
 		))
+		for j := 0; j < taskCount; j++ {
+			pool.Submit(agilepool.TaskFunc(func() error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			}))
+		}
+		pool.Wait()
+		pool.Close()
+	}
+}
+
+func BenchmarkAgilePoolSequentialRingQueue(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		// 20k worker capacity gives the best performance
+		pool := agilepool.NewPool(agilepool.NewConfig(
+			agilepool.WithCleanPeriod(500*time.Millisecond),
+			agilepool.WithTaskQueueSize(100000),
+			agilepool.WithWorkerNumCapacity(20000),
+			agilepool.WithIdleContainerType(agilepool.RingQueueType),
+		))
+
 		for j := 0; j < taskCount; j++ {
 			pool.Submit(agilepool.TaskFunc(func() error {
 				time.Sleep(10 * time.Millisecond)
@@ -235,6 +280,52 @@ func BenchmarkAgilePoolBurstLinkedList(b *testing.B) {
 			agilepool.WithTaskQueueSize(10000),
 			agilepool.WithWorkerNumCapacity(20000),
 			agilepool.WithIdleContainerType(agilepool.LinkedListType),
+		))
+
+		// 10 shards, each handles 1/10 of tokens and submitters
+		submittersPerShard := submitterCount / numShards
+
+		var submittedCount int64
+		var submitWG sync.WaitGroup
+		for s := 0; s < numShards; s++ {
+			tokenCh := make(chan struct{}, 10000)
+			go dispenseTokens(b, s, tokenCh, phases, tickInterval)
+			submitTasks(pool, tokenCh, submittersPerShard, &submitWG, &submittedCount)
+		}
+
+		submitWG.Wait()
+		pool.Wait()
+		b.Logf("Total submitted tasks: %d", atomic.LoadInt64(&submittedCount))
+		pool.Close()
+	}
+}
+
+func BenchmarkAgilePoolBurstRingQueue(b *testing.B) {
+	const (
+		submitterCount  = 20000   // concurrent submitters
+		baseRatePerSec  = 200000  // base rate/sec
+		burstRatePerSec = 1500000 // burst rate/sec
+		tickInterval    = time.Millisecond
+		ticksPerSec     = int(time.Second / tickInterval) // 1000
+		basePerTick     = baseRatePerSec / ticksPerSec    // 200
+		burstPerTick    = burstRatePerSec / ticksPerSec   // 1500
+		numShards       = 10                              // sharding (single chan cannot support many submitters)
+	)
+
+	phases := []phase{
+		{ticks: 2 * ticksPerSec, tokens: basePerTick / numShards},  // 0-2s  base
+		{ticks: 2 * ticksPerSec, tokens: burstPerTick / numShards}, // 2-4s  burst  ← spike 1
+		{ticks: 2 * ticksPerSec, tokens: basePerTick / numShards},  // 4-6s  base
+		{ticks: 2 * ticksPerSec, tokens: burstPerTick / numShards}, // 6-8s  burst  ← spike 2
+		{ticks: 2 * ticksPerSec, tokens: basePerTick / numShards},  // 8-10s base
+	}
+
+	for i := 0; i < b.N; i++ {
+		pool := agilepool.NewPool(agilepool.NewConfig(
+			agilepool.WithCleanPeriod(500*time.Millisecond),
+			agilepool.WithTaskQueueSize(10000),
+			agilepool.WithWorkerNumCapacity(20000),
+			agilepool.WithIdleContainerType(agilepool.RingQueueType),
 		))
 
 		// 10 shards, each handles 1/10 of tokens and submitters
