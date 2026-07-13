@@ -86,6 +86,90 @@ func BenchmarkAgilePoolRingQueue(b *testing.B) {
 	}
 }
 
+func BenchmarkAgilePoolRunParallelMinHeap(b *testing.B) {
+	pool := agilepool.NewPool(agilepool.NewConfig(
+		agilepool.WithCleanPeriod(500*time.Millisecond),
+		agilepool.WithTaskQueueSize(10000),
+		agilepool.WithWorkerNumCapacity(50000),
+		agilepool.WithIdleContainerType(agilepool.MinHeapType),
+	))
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			pool.Submit(agilepool.TaskFunc(func() error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			}))
+		}
+	})
+
+	pool.Wait()
+	pool.Close()
+}
+
+func BenchmarkAgilePoolRunParallelLinkedList(b *testing.B) {
+	pool := agilepool.NewPool(agilepool.NewConfig(
+		agilepool.WithCleanPeriod(500*time.Millisecond),
+		agilepool.WithTaskQueueSize(10000),
+		agilepool.WithWorkerNumCapacity(50000),
+		agilepool.WithIdleContainerType(agilepool.LinkedListType),
+	))
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			pool.Submit(agilepool.TaskFunc(func() error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			}))
+		}
+	})
+
+	pool.Wait()
+	pool.Close()
+}
+
+func BenchmarkAgilePoolRunParallelRingQueue(b *testing.B) {
+	pool := agilepool.NewPool(agilepool.NewConfig(
+		agilepool.WithCleanPeriod(500*time.Millisecond),
+		agilepool.WithTaskQueueSize(10000),
+		agilepool.WithWorkerNumCapacity(50000),
+		agilepool.WithIdleContainerType(agilepool.RingQueueType),
+	))
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			pool.Submit(agilepool.TaskFunc(func() error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			}))
+		}
+	})
+
+	pool.Wait()
+	pool.Close()
+}
+
+func BenchmarkAgilePoolRunParallelSlice(b *testing.B) {
+	pool := agilepool.NewPool(agilepool.NewConfig(
+		agilepool.WithCleanPeriod(500*time.Millisecond),
+		agilepool.WithTaskQueueSize(10000),
+		agilepool.WithWorkerNumCapacity(50000),
+		agilepool.WithIdleContainerType(agilepool.SliceType),
+	))
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			pool.Submit(agilepool.TaskFunc(func() error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			}))
+		}
+	})
+
+	pool.Wait()
+	pool.Close()
+}
+
 func BenchmarkAgilePoolSequentialMinHeap(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// 20k worker capacity gives the best performance
