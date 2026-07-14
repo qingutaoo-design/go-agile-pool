@@ -31,6 +31,42 @@ func TestAgilePoolSubmitTypedNilTaskDoesNotBlockWait(t *testing.T) {
 	agilePool.Wait()
 }
 
+func TestAgilePoolTrySubmitAcceptsTask(t *testing.T) {
+	agilePool := agilepool.NewPool(agilepool.NewConfig())
+	defer agilePool.Close()
+
+	var executed int64
+	ok := agilePool.TrySubmit(agilepool.TaskFunc(func() error {
+		atomic.AddInt64(&executed, 1)
+		return nil
+	}))
+
+	assert.True(t, ok)
+	agilePool.Wait()
+	assert.Equal(t, int64(1), atomic.LoadInt64(&executed))
+}
+
+func TestAgilePoolTrySubmitRejectsNilTask(t *testing.T) {
+	agilePool := agilepool.NewPool(agilepool.NewConfig())
+	defer agilePool.Close()
+
+	ok := agilePool.TrySubmit(nil)
+
+	assert.False(t, ok)
+	agilePool.Wait()
+}
+
+func TestAgilePoolTrySubmitRejectsTaskAfterClose(t *testing.T) {
+	agilePool := agilepool.NewPool(agilepool.NewConfig())
+	agilePool.Close()
+
+	ok := agilePool.TrySubmit(agilepool.TaskFunc(func() error {
+		return nil
+	}))
+
+	assert.False(t, ok)
+}
+
 func TestAgilePoolSubmitBeforeNilTaskDoesNotBlockWait(t *testing.T) {
 	agilePool := agilepool.NewPool(agilepool.NewConfig())
 	defer agilePool.Close()

@@ -175,7 +175,18 @@ func (p *Pool) Submit(task Task) {
 		return
 	}
 
-	p.submit(context.Background(), task)
+	_ = p.submit(context.Background(), task)
+}
+
+// TrySubmit submits a task and reports whether the pool accepted it.
+// It follows the configured WorkMode: in BLOCK mode it may wait until
+// the task is accepted, while in NONBLOCK mode it returns false when
+// the task cannot be accepted immediately.
+func (p *Pool) TrySubmit(task Task) bool {
+	if isNilTask(task) {
+		return false
+	}
+	return p.submit(context.Background(), task)
 }
 
 func (p *Pool) SubmitCtx(ctx context.Context, task Task) {
@@ -189,15 +200,15 @@ func (p *Pool) SubmitCtx(ctx context.Context, task Task) {
 		return
 	}
 
-	p.submit(ctx, &contextTask{
+	_ = p.submit(ctx, &contextTask{
 		ctx:  ctx,
 		task: task,
 	})
 }
 
-func (p *Pool) submit(ctx context.Context, task Task) {
+func (p *Pool) submit(ctx context.Context, task Task) bool {
 	if atomic.LoadInt32(&p.closed) == 1 {
-		return
+		return false
 	}
 	atomic.AddInt64(&p.submitCount, 1)
 	p.wg.Add(1)
@@ -214,16 +225,18 @@ func (p *Pool) submit(ctx context.Context, task Task) {
 	if p.config.workMode == NONBLOCK {
 		select {
 		case p.taskQueue <- task:
+			return true
 		default:
 			p.done()
+			return false
+
 		}
-		return
 	}
 
 	// Try fast path: push to channel directly.
 	select {
 	case p.taskQueue <- task:
-		return
+		return true
 	default:
 	}
 
@@ -232,7 +245,7 @@ func (p *Pool) submit(ctx context.Context, task Task) {
 	if p.overflowClosed {
 		p.taskMu.Unlock()
 		p.done()
-		return
+		return false
 	}
 
 	// Backpressure: when the chunked buffer exceeds maxChunkLen, block
@@ -241,7 +254,7 @@ func (p *Pool) submit(ctx context.Context, task Task) {
 	if p.chunkLen >= maxChunkLen {
 		p.taskMu.Unlock()
 		p.taskQueue <- task // block until a worker picks up
-		return
+		return true
 	}
 
 	p.pushTail(task)
@@ -257,6 +270,7 @@ func (p *Pool) submit(ctx context.Context, task Task) {
 		}
 	}
 	p.taskMu.Unlock()
+	return true
 }
 
 // pushTail appends a task to the tail of the chunked buffer.
