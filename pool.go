@@ -62,15 +62,6 @@ func GetDefaultPool() *Pool {
 	return p
 }
 
-// taskChunk is a fixed-size node in the linked-list task buffer.
-// Each chunk holds up to taskChunkSize Task values. Using small,
-// fixed-size nodes avoids the doubling overhead of a single slice
-// and makes GC work with smaller, independently collectable objects.
-type taskChunk struct {
-	tasks [taskChunkSize]Task
-	next  *taskChunk
-}
-
 type Pool struct {
 	taskQueue         chan Task
 	closePoolCn       chan struct{}
@@ -88,16 +79,8 @@ type Pool struct {
 	// over the pool lifetime. For the number of currently active workers,
 	// use GetRunningWorkersNum().
 	workerCreateCount int64
-
-	// ---- task queue (small handoff channel + chunked linked-list buffer) ----
-	headChunk      *taskChunk // head of linked-list buffer (where workers pop)
-	tailChunk      *taskChunk // tail of linked-list buffer (where submitters push)
-	headIdx        int        // pop index within headChunk
-	tailIdx        int        // push index within tailChunk
-	chunkLen       int64      // total tasks across all chunks (replaces len(taskBuf))
-	taskMu         sync.Mutex // protects the chunked buffer
-	overflowClosed bool       // prevents spool after Close
-	chunkPool      sync.Pool  // recycles consumed taskChunk nodes
+	// taskBuf stores tasks in a chunked linked-list buffer when taskQueue is full.
+	taskBuf *chunkedTaskBuffer
 
 	// pendingTasks counts all submitted tasks that have not yet started
 	// processing. Unlike buf+channel occupancy, it includes submitters
@@ -128,6 +111,7 @@ func NewPool(c *Config) *Pool {
 		logger:      log.Default(),
 		capacity:    c.workerNumCapacity,
 		taskQueue:   make(chan Task, c.taskQueueSize),
+		taskBuf:     newChunkedTaskBuffer(),
 	}
 
 	// Select muIdle lock implementation based on config: SpinLock or MutexLock (sync.Mutex)
@@ -151,8 +135,6 @@ func NewPool(c *Config) *Pool {
 	p.submitHist = newHistogram(submitBuckets, c.statsWindowSize)
 	p.consumeHist = newHistogram(consumeBuckets, c.statsWindowSize)
 	p.exitHist = newHistogram(exitBuckets, c.statsWindowSize)
-
-	p.chunkPool.New = func() interface{} { return &taskChunk{} }
 
 	p.workerPool.New = func() interface{} {
 		atomic.AddInt64(&p.workerCreateCount, 1)
@@ -235,7 +217,6 @@ func (p *Pool) submit(ctx context.Context, task Task) bool {
 		default:
 			p.done()
 			return false
-
 		}
 	}
 
@@ -246,94 +227,25 @@ func (p *Pool) submit(ctx context.Context, task Task) bool {
 	default:
 	}
 
-	// Channel full -> spool to chunked buffer.
-	p.taskMu.Lock()
-	if p.overflowClosed {
-		p.taskMu.Unlock()
-		p.done()
-		return false
-	}
-
-	// Backpressure: when the chunked buffer exceeds maxChunkLen, block
-	// on the handoff channel instead of growing the buffer further.
-	// This gives workers time to drain and bounds peak memory.
-	if p.chunkLen >= maxChunkLen {
-		p.taskMu.Unlock()
-		p.taskQueue <- task // block until a worker picks up
-		return true
-	}
-
-	p.pushTail(task)
-	// Forward: pop from head and try to send to handoff channel.
-	// This wakes a polling worker immediately without waiting for
-	// the next scaler tick. If the channel is full the task is
-	// re-queued at the tail — workers drain chunks anyway.
-	if t, ok := p.popHead(); ok {
+	result := p.taskBuf.PushAndForward(task, func(t Task) bool {
 		select {
 		case p.taskQueue <- t:
+			return true
 		default:
-			p.pushTail(t) // channel full, return to queue
+			return false
 		}
-	}
-	p.taskMu.Unlock()
-	return true
-}
+	})
 
-// pushTail appends a task to the tail of the chunked buffer.
-// Must be called with taskMu held.
-func (p *Pool) pushTail(task Task) {
-	if p.tailChunk == nil {
-		c := p.chunkPool.Get().(*taskChunk)
-		p.tailChunk = c
-		p.headChunk = c
-		p.tailIdx = 0
-		p.headIdx = 0
-	} else if p.tailIdx >= taskChunkSize {
-		c := p.chunkPool.Get().(*taskChunk)
-		p.tailChunk.next = c
-		p.tailChunk = c
-		p.tailIdx = 0
+	switch result {
+	case taskBufferClosed:
+		p.done()
+		return false
+	case taskBufferFull:
+		p.taskQueue <- task // block until a worker picks up
+		return true
+	default:
+		return true
 	}
-	p.tailChunk.tasks[p.tailIdx] = task
-	p.tailIdx++
-	p.chunkLen++
-}
-
-// popHead removes and returns the task at the head of the chunked buffer.
-// Returns nil, false if the buffer is empty.
-// Must be called with taskMu held.
-func (p *Pool) popHead() (Task, bool) {
-	if p.headChunk == nil {
-		return nil, false
-	}
-	if p.headIdx >= taskChunkSize {
-		// Advance to next chunk; recycle the exhausted one.
-		next := p.headChunk.next
-		p.headChunk.next = nil
-		p.chunkPool.Put(p.headChunk)
-		p.headChunk = next
-		p.headIdx = 0
-		if p.headChunk == nil {
-			p.tailChunk = nil
-			p.tailIdx = 0
-			return nil, false
-		}
-	}
-	// Head caught up to tail in the same chunk — queue drained.
-	if p.headChunk == p.tailChunk && p.headIdx >= p.tailIdx {
-		p.headChunk.next = nil
-		p.chunkPool.Put(p.headChunk)
-		p.headChunk = nil
-		p.tailChunk = nil
-		p.headIdx = 0
-		p.tailIdx = 0
-		return nil, false
-	}
-	task := p.headChunk.tasks[p.headIdx]
-	p.headChunk.tasks[p.headIdx] = nil // help GC
-	p.headIdx++
-	p.chunkLen--
-	return task, true
 }
 
 type contextTask struct {
@@ -446,10 +358,7 @@ func (p *Pool) scaleIfNeeded() {
 	submitMed, consumeMed, exitMed := p.getMedianRates()
 	running := atomic.LoadInt64(&p.runningWorkersNum)
 
-	// Read chunkLen under its lock -- still needed for bufPressure below.
-	p.taskMu.Lock()
-	bufDepth := p.chunkLen
-	p.taskMu.Unlock()
+	bufDepth := p.taskBuf.Len()
 
 	// totalBacklog uses pendingTasks (atomic), covering all submitted
 	// tasks not yet started, including submitters blocked on the
@@ -579,9 +488,7 @@ func (p *Pool) Close() {
 	}
 	defaultPool.CompareAndSwap(p, nil)
 
-	p.taskMu.Lock()
-	p.overflowClosed = true
-	p.taskMu.Unlock()
+	p.taskBuf.Close()
 
 	close(p.closePoolCn)
 }
