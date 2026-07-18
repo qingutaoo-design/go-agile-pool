@@ -59,17 +59,7 @@ loop:
 			// reduce contention with the submission path.
 			const batchSize = 8
 			var batch [batchSize]Task
-			n := 0
-			w.pool.taskMu.Lock()
-			for n < batchSize {
-				t, ok := w.pool.popHead()
-				if !ok {
-					break
-				}
-				batch[n] = t
-				n++
-			}
-			w.pool.taskMu.Unlock()
+			n := w.pool.taskBuf.PopBatch(batch[:])
 			for i := 0; i < n; i++ {
 				w.lastActiveAt = time.Now()
 				w.runTask(batch[i])
